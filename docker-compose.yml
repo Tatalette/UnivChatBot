@@ -1,0 +1,54 @@
+services:
+  glpi-db:
+    image: mariadb:10.11
+    container_name: glpi-db
+    networks: [glpi-net]
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: glpidb
+      MYSQL_USER: glpi
+      MYSQL_PASSWORD: glpipass
+    volumes:
+      - glpi-db:/var/lib/mysql
+
+  glpi:
+    image: diouxx/glpi:latest
+    container_name: glpi
+    networks: [glpi-net]
+    ports:
+      - "8080:80"
+    environment:
+      TIMEZONE: Europe/Paris
+    depends_on: [glpi-db]
+
+  # --- Ajoutés pour le projet ---
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: chatbot-pg
+    networks: [glpi-net]
+    environment:
+      POSTGRES_DB: chatbot
+      POSTGRES_USER: chatbot
+      POSTGRES_PASSWORD: chatpass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./src/chatbot/db/migrations:/docker-entrypoint-initdb.d:ro
+
+  chatbot:
+    build: .
+    container_name: chatbot-api
+    networks: [glpi-net]
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on: [postgres, glpi]
+    extra_hosts:
+      - "193.48.31.6:host-gateway"
+
+networks:
+  glpi-net:
+    external: true
+
+volumes:
+  glpi-db:
+  pgdata:
