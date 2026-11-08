@@ -19,6 +19,8 @@ services:
       - "8080:80"
     environment:
       TIMEZONE: Europe/Paris
+    volumes:
+      - ./plugin_glpi/chatbot:/var/www/html/glpi/plugins/chatbot:ro
     depends_on: [glpi-db]
 
   # --- Ajoutés pour le projet ---

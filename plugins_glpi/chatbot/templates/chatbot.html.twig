@@ -1,0 +1,183 @@
+{% extends "layout/page_without_tabs.html.twig" %}
+
+{% block content %}
+<div class="container-narrow py-3">
+
+  <div class="card">
+    <div class="card-header d-flex align-items-center">
+      <i class="ti ti-robot me-2" style="font-size: 1.5rem;"></i>
+      <h3 class="card-title mb-0">Assistant IA</h3>
+    </div>
+
+    <div class="card-body">
+
+      <p class="text-muted">
+        Posez votre question. Si la réponse n'est pas connue,
+        l'assistant cherchera une solution et vous pourrez la valider
+        ou demander l'aide d'un technicien.
+      </p>
+
+      <div id="chatbot-thread" class="mb-3"></div>
+
+      <div class="mb-2">
+        <textarea
+          id="chatbot-input"
+          class="form-control"
+          rows="3"
+          placeholder="Décrivez votre problème…"
+        ></textarea>
+      </div>
+
+      <div class="d-flex gap-2">
+        <button id="chatbot-send" class="btn btn-primary">
+          <i class="ti ti-send me-1"></i> Envoyer
+        </button>
+        <button id="chatbot-reset" class="btn btn-outline-secondary">
+          <i class="ti ti-refresh me-1"></i> Nouveau
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<script>
+window.CHATBOT_CTX = {
+  csrfToken: "{{ csrf_token }}",
+  ajaxUrl:   "{{ ajax_url }}",
+  userId:    {{ glpi_user_id }}
+};
+</script>
+
+<style>
+  .container-narrow { max-width: 820px; margin: 0 auto; }
+  .chat-bubble { padding: .75rem 1rem; border-radius: .5rem; margin-bottom: .5rem; white-space: pre-wrap; }
+  .chat-bubble.user { background: #e7f1ff; }
+  .chat-bubble.bot  { background: #f3f4f6; }
+  .chat-bubble.error { background: #fee2e2; color: #991b1b; }
+  .chat-actions { margin-top: .25rem; }
+</style>
+
+<script>
+(function () {
+  const ctx = window.CHATBOT_CTX;
+  const thread = document.getElementById('chatbot-thread');
+  const input  = document.getElementById('chatbot-input');
+  const btnSend = document.getElementById('chatbot-send');
+  const btnReset = document.getElementById('chatbot-reset');
+
+  function addBubble(role, text, extraClass) {
+    const div = document.createElement('div');
+    div.className = 'chat-bubble ' + role + (extraClass ? ' ' + extraClass : '');
+    div.textContent = text;
+    thread.appendChild(div);
+    return div;
+  }
+
+  function addActions(conversationId, bubble) {
+    const wrap = document.createElement('div');
+    wrap.className = 'chat-actions d-flex gap-2 mb-3';
+
+    const ok = document.createElement('button');
+    ok.className = 'btn btn-sm btn-success';
+    ok.innerHTML = '<i class="ti ti-check me-1"></i> Oui, ça résout mon problème';
+    ok.onclick = () => handleDecision('validate', conversationId, wrap);
+
+    const ko = document.createElement('button');
+    ko.className = 'btn btn-sm btn-danger';
+    ko.innerHTML = '<i class="ti ti-x me-1"></i> Non, contacter un technicien';
+    ko.onclick = () => handleDecision('reject', conversationId, wrap);
+
+    wrap.appendChild(ok);
+    wrap.appendChild(ko);
+    thread.appendChild(wrap);
+  }
+
+  async function handleDecision(action, conversationId, wrap) {
+    wrap.remove();
+    const fd = new FormData();
+    fd.append('_glpi_csrf_token', ctx.csrfToken);
+    fd.append('conversation_id', conversationId);
+
+    try {
+      const r = await fetch(ctx.ajaxUrl + '/' + action + '.php', {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin'
+      });
+      const data = await r.json();
+      if (data.error) {
+        addBubble('error', 'Erreur : ' + data.error);
+        return;
+      }
+      if (action === 'validate') {
+        addBubble('bot', '✔ Réponse validée. Elle est désormais disponible pour les prochains utilisateurs.');
+      } else {
+        addBubble('bot',
+          '✔ Un ticket a été ouvert (#' + (data.ticket_id ?? '?') + '). Un technicien vous répondra prochainement.');
+      }
+    } catch (e) {
+      addBubble('error', 'Erreur réseau : ' + e);
+    }
+  }
+
+  async function sendQuestion() {
+    const q = input.value.trim();
+    if (!q) return;
+
+    addBubble('user', q);
+    input.value = '';
+    btnSend.disabled = true;
+    const loading = addBubble('bot', '⏳ Recherche en cours…');
+
+    const fd = new FormData();
+    fd.append('_glpi_csrf_token', ctx.csrfToken);
+    fd.append('question', q);
+    fd.append('glpi_user_id', String(ctx.userId));
+
+    try {
+      const r = await fetch(ctx.ajaxUrl + '/ask.php', {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin'
+      });
+      const data = await r.json();
+      loading.remove();
+
+      if (data.error) {
+        addBubble('error', 'Erreur : ' + data.error);
+        return;
+      }
+
+      addBubble('bot', data.answer);
+
+      if (data.status === 'proposed' && data.conversation_id) {
+        addBubble('bot',
+          'Cette réponse est une proposition de l\'IA. Vous pouvez la valider ' +
+          'ou demander l\'aide d\'un technicien.');
+        addActions(data.conversation_id);
+      } else if (data.status === 'found_in_kb') {
+        addBubble('bot', '(réponse issue de la base de connaissances)');
+      }
+    } catch (e) {
+      loading.remove();
+      addBubble('error', 'Erreur réseau : ' + e);
+    } finally {
+      btnSend.disabled = false;
+      input.focus();
+    }
+  }
+
+  btnSend.addEventListener('click', sendQuestion);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) sendQuestion();
+  });
+  btnReset.addEventListener('click', () => {
+    thread.innerHTML = '';
+    input.value = '';
+    input.focus();
+  });
+})();
+</script>
+{% endblock %}
